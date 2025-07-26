@@ -16,7 +16,10 @@ public class WebSocketServer
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _listener.Start();
+        cancellationToken.Register(() => _listener.Stop());
+
         Console.WriteLine("Server started. Listening for connections...");
+        var clientProcessingTasks = new List<Task>();
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -26,7 +29,8 @@ public class WebSocketServer
                 if (listenerContext.Request.IsWebSocketRequest)
                 {
                     // Offload to a new task to keep the listener loop non-blocking
-                    _ = ProcessWebSocketRequestAsync(listenerContext, cancellationToken);
+                    Task processingTask = ProcessWebSocketRequestAsync(listenerContext, cancellationToken);
+                    clientProcessingTasks.Add(processingTask);
                 }
                 else
                 {
@@ -45,7 +49,9 @@ public class WebSocketServer
                 Console.WriteLine($"Listener loop error: {ex.Message}");
             }
         }
-        _listener.Stop();
+        // The listener loop has exited. Wait for all client tasks to complete.
+        await Task.WhenAll(clientProcessingTasks);
+        Console.WriteLine("All client processing tasks completed.");
         Console.WriteLine("Server stopped.");
     }
 
