@@ -3,14 +3,39 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 
+public class MessageReceivedEventArgs : EventArgs
+{
+    public string ClientId { get; }
+    public WebSocketMessageType MessageType { get; }
+    public byte[] Data { get; }
+
+    public MessageReceivedEventArgs(string clientId, WebSocketMessageType messageType, byte[] data)
+    {
+        ClientId = clientId;
+        MessageType = messageType;
+        Data = data;
+    }
+}
+
 public class WebSocketServer
 {
+    public event EventHandler<MessageReceivedEventArgs>? OnMessageReceived;
+
     private readonly HttpListener _listener = new HttpListener();
     private readonly ConcurrentDictionary<string, WebSocket> _clients = new ConcurrentDictionary<string, WebSocket>();
 
     public WebSocketServer(string prefix)
     {
         _listener.Prefixes.Add(prefix);
+    }
+
+    public async Task SendMessageAsync(string clientId, string message)
+    {
+        if (_clients.TryGetValue(clientId, out WebSocket? webSocket))
+        {
+            Byte[] buffer = Encoding.UTF8.GetBytes(message);
+            await webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+        }
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -126,16 +151,7 @@ public class WebSocketServer
 
             Byte[] messageBytes = ms.ToArray();
 
-            if (result.MessageType == WebSocketMessageType.Text)
-            {
-                string receivedMessage = Encoding.UTF8.GetString(messageBytes);
-                Console.WriteLine($"Received from {clientId}: {receivedMessage}");
-
-                // Echo the message back
-                string responseMessage = $"Echo: {receivedMessage}";
-                byte[] responseBuffer = Encoding.UTF8.GetBytes(responseMessage);
-                await webSocket.SendAsync(new ArraySegment<byte>(responseBuffer), WebSocketMessageType.Text, true, cancellationToken);
-            }
+            OnMessageReceived?.Invoke(this, new MessageReceivedEventArgs(clientId, result.MessageType, messageBytes));
 
             // Clear the stream for the new message. It's important to do this before the next receive loop.
             ms.SetLength(0);
@@ -144,6 +160,39 @@ public class WebSocketServer
     }
 }
 
+public class MessageHandler
+{
+    private readonly WebSocketServer _server;
+
+    public MessageHandler(WebSocketServer server)
+    {
+        _server = server;
+    }
+
+    // This is the method that will be called when the server receives a message.
+    public void HandleMessage(object? sender, MessageReceivedEventArgs e)
+    {
+        if (e.MessageType == WebSocketMessageType.Text)
+        {
+            string receivedMessage = Encoding.UTF8.GetString(e.Data);
+            Console.WriteLine($"[MessageHandler] Received TEXT from {e.ClientId}: {receivedMessage}");
+
+            // Echo the message back to the client
+            string responseMessage = $"Echo from MessageHandler: {receivedMessage}";
+            _server.SendMessageAsync(e.ClientId, responseMessage).Wait();
+        }
+        else if (e.MessageType == WebSocketMessageType.Binary)
+        {
+            Console.WriteLine($"[MessageHandler] Received BINARY data from {e.ClientId}: {e.Data.Length} bytes");
+
+            string responseMessage = $"Echo from MessageHandler: Received BINARY data of {e.Data.Length} bytes";
+            _server.SendMessageAsync(e.ClientId, responseMessage).Wait();
+        }
+    }
+
+}
+
+
 // Main entry point to run the server
 class Server
 {
@@ -151,6 +200,9 @@ class Server
     {
         var server = new WebSocketServer("http://localhost:8000/");
         var cts = new CancellationTokenSource();
+
+        MessageHandler messageHandler = new MessageHandler(server);
+        server.OnMessageReceived += messageHandler.HandleMessage;
 
         Console.CancelKeyPress += (s, e) =>
         {
