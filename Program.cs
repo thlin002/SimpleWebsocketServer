@@ -97,9 +97,25 @@ public class WebSocketServer
     private async Task ReceiveLoopAsync(WebSocket webSocket, string clientId, CancellationToken cancellationToken)
     {
         var buffer = new byte[1024 * 4];
-        while (webSocket.State == WebSocketState.Open &&!cancellationToken.IsCancellationRequested)
+
+        // Use a MemoryStream to accumulate the message fragments
+        using var ms = new MemoryStream();
+
+        while (webSocket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
         {
-            WebSocketReceiveResult result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
+            WebSocketReceiveResult result;
+
+            do
+            {
+                // Await the next chunk of data
+                result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
+
+                // Only write to the stream if the message isn't a close message.
+                if (result.MessageType != WebSocketMessageType.Close)
+                {
+                    ms.Write(buffer, 0, result.Count);
+                }
+            } while (!result.EndOfMessage);
 
             if (result.MessageType == WebSocketMessageType.Close)
             {
@@ -107,10 +123,12 @@ public class WebSocketServer
                 await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", cancellationToken);
                 break;
             }
-            
+
+            Byte[] messageBytes = ms.ToArray();
+
             if (result.MessageType == WebSocketMessageType.Text)
             {
-                string receivedMessage = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                string receivedMessage = Encoding.UTF8.GetString(messageBytes);
                 Console.WriteLine($"Received from {clientId}: {receivedMessage}");
 
                 // Echo the message back
@@ -118,6 +136,10 @@ public class WebSocketServer
                 byte[] responseBuffer = Encoding.UTF8.GetBytes(responseMessage);
                 await webSocket.SendAsync(new ArraySegment<byte>(responseBuffer), WebSocketMessageType.Text, true, cancellationToken);
             }
+
+            // Clear the stream for the new message. It's important to do this before the next receive loop.
+            ms.SetLength(0);
+            ms.Position = 0;
         }
     }
 }
