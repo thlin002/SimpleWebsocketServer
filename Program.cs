@@ -41,17 +41,17 @@ public class WebSocketServer
             catch (HttpListenerException)
             {
                 // Listener has been stopped.
-                Console.WriteLine("Listener has been stopped because of a HttpListenerException.");
+                Console.WriteLine("HttpListener has been stopped.");
                 break;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Listener loop error: {ex.Message}");
+                Console.WriteLine($"HttpListener loop error: {ex.Message}");
             }
         }
         // The listener loop has exited. Wait for all client tasks to complete.
         await Task.WhenAll(clientProcessingTasks);
-        Console.WriteLine("All client processing tasks completed.");
+        Console.WriteLine("All client processing tasks closed.");
         Console.WriteLine("Server stopped.");
     }
 
@@ -78,17 +78,18 @@ public class WebSocketServer
         finally
         {
             // Cleanup on disconnect
+            if (webSocket != null && webSocket.State != WebSocketState.Closed)
+            {
+                // Ensure the WebSocket is closed gracefully if possible
+                await webSocket.CloseAsync(WebSocketCloseStatus.InternalServerError, "Server error", CancellationToken.None);
+                Console.WriteLine($"WebSocket closed for client {clientId}.");
+            }
+
             if (_clients.TryRemove(clientId, out _))
             {
                 Console.WriteLine($"Client disconnected: {clientId}");
             }
 
-            if (webSocket != null && webSocket.State != WebSocketState.Closed)
-            {
-                // Ensure the WebSocket is closed gracefully if possible
-                await webSocket.CloseAsync(WebSocketCloseStatus.InternalServerError, "Server error", CancellationToken.None);
-                Console.WriteLine($"WebSocket for client {clientId} closed.");
-            }
             webSocket?.Dispose();
         }
     }
